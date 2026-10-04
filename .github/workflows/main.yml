@@ -16,11 +16,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build yasm nasm pkg-config
 
-      - name: Set up Android NDK
+      - name: Set up Environment Variables
         run: |
-          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | sort -V | tail -n 1)
-          echo "NDK_ROOT=$NDK_PATH" >> $GITHUB_ENV
-          echo "TOOLCHAIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+          echo "NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+          echo "TOOLCHAIN=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
 
       - name: Build libmysofa (Static ARM64)
         run: |
@@ -31,6 +30,7 @@ jobs:
             -DANDROID_ABI="arm64-v8a" \
             -DANDROID_PLATFORM=android-24 \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/dist" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_TESTS=OFF
           cmake --build build --target install
@@ -41,20 +41,22 @@ jobs:
           cd FFmpeg
           export PATH="$TOOLCHAIN/bin:$PATH"
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/dist/lib/pkgconfig:$PKG_CONFIG_PATH"
+          export PKG_CONFIG_LIBDIR="$GITHUB_WORKSPACE/dist/lib/pkgconfig"
 
           ./configure \
             --prefix="$GITHUB_WORKSPACE/dist" \
             --target-os=android \
             --arch=aarch64 \
             --cpu=armv8-a \
-            --cross-prefix=aarch64-linux-android- \
-            --cc=aarch64-linux-android24-clang \
-            --cxx=aarch64-linux-android24-clang++ \
-            --ar=llvm-ar \
-            --ranlib=llvm-ranlib \
-            --strip=llvm-strip \
+            --cc="$TOOLCHAIN/bin/aarch64-linux-android24-clang" \
+            --cxx="$TOOLCHAIN/bin/aarch64-linux-android24-clang++" \
+            --ar="$TOOLCHAIN/bin/llvm-ar" \
+            --nm="$TOOLCHAIN/bin/llvm-nm" \
+            --ranlib="$TOOLCHAIN/bin/llvm-ranlib" \
+            --strip="$TOOLCHAIN/bin/llvm-strip" \
             --extra-cflags="-I$GITHUB_WORKSPACE/dist/include" \
             --extra-ldflags="-L$GITHUB_WORKSPACE/dist/lib" \
+            --extra-libs="-lm -lz" \
             --pkg-config-flags="--static" \
             --enable-cross-compile \
             --enable-pic \
@@ -64,10 +66,10 @@ jobs:
             --disable-ffplay \
             --disable-ffprobe \
             --enable-ffmpeg \
-            --enable-small
+            --enable-small || { cat ffbuild/config.log | tail -n 60; exit 1; }
 
           make -j$(nproc)
-          llvm-strip ffmpeg
+          $TOOLCHAIN/bin/llvm-strip ffmpeg
           cp ffmpeg "$GITHUB_WORKSPACE/libffmpeg.so"
 
       - name: Upload Artifact
