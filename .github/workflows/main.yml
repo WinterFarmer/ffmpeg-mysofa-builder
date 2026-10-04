@@ -1,1 +1,78 @@
+name: Build FFmpeg with libmysofa for Android
 
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Host Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build yasm nasm pkg-config
+
+      - name: Set up Android NDK
+        run: |
+          NDK_PATH=$(ls -d $ANDROID_SDK_ROOT/ndk/* | sort -V | tail -n 1)
+          echo "NDK_ROOT=$NDK_PATH" >> $GITHUB_ENV
+          echo "TOOLCHAIN=$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64" >> $GITHUB_ENV
+
+      - name: Build libmysofa (Static ARM64)
+        run: |
+          git clone --depth 1 https://github.com/hoene/libmysofa.git
+          cd libmysofa
+          cmake -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="arm64-v8a" \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/dist" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTS=OFF
+          cmake --build build --target install
+
+      - name: Build FFmpeg with libmysofa
+        run: |
+          git clone --depth 1 --branch n7.0 https://github.com/FFmpeg/FFmpeg.git
+          cd FFmpeg
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/dist/lib/pkgconfig:$PKG_CONFIG_PATH"
+
+          ./configure \
+            --prefix="$GITHUB_WORKSPACE/dist" \
+            --target-os=android \
+            --arch=aarch64 \
+            --cpu=armv8-a \
+            --cross-prefix=aarch64-linux-android- \
+            --cc=aarch64-linux-android24-clang \
+            --cxx=aarch64-linux-android24-clang++ \
+            --ar=llvm-ar \
+            --ranlib=llvm-ranlib \
+            --strip=llvm-strip \
+            --extra-cflags="-I$GITHUB_WORKSPACE/dist/include" \
+            --extra-ldflags="-L$GITHUB_WORKSPACE/dist/lib" \
+            --pkg-config-flags="--static" \
+            --enable-cross-compile \
+            --enable-pic \
+            --enable-libmysofa \
+            --enable-zlib \
+            --disable-doc \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --enable-ffmpeg \
+            --enable-small
+
+          make -j$(nproc)
+          llvm-strip ffmpeg
+          cp ffmpeg "$GITHUB_WORKSPACE/libffmpeg.so"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libffmpeg-arm64-mysofa
+          path: ${{ github.workspace }}/libffmpeg.so
+          
